@@ -1,0 +1,6 @@
+{
+  "name": "PDF Overlay Cropper",
+  "description": "Upload a PDF, view pages stacked with transparency, and draw a dynamic rectangle to crop all pages at once.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

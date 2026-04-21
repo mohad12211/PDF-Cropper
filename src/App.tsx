@@ -1,0 +1,296 @@
+import React, { useState, useRef, useEffect } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
+// Explicitly using the Vite way to load workers
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { PDFDocument } from 'pdf-lib';
+import { UploadCloud, Scissors, Download, Loader2, FileUp } from 'lucide-react';
+import { CropBox } from './components/CropBox';
+import { cn } from './lib/utils';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+export default function App() {
+  const [file, setFile] = useState<File | null>(null);
+  const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null);
+  const [combinedImageDataUrl, setCombinedImageDataUrl] = useState<string | null>(null);
+  const [pdfDimensions, setPdfDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [numTotalPages, setNumTotalPages] = useState<number>(0);
+  const [renderingProgress, setRenderingProgress] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  const [cropBox, setCropBox] = useState<{ x: number, y: number, width: number, height: number }>({ x: 0, y: 0, width: 0, height: 0 });
+  const [containerDimensions, setContainerDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (containerRef.current && pdfDimensions) {
+        const { clientWidth, clientHeight } = containerRef.current;
+        const aspect = pdfDimensions.width / pdfDimensions.height;
+        
+        let width = clientWidth;
+        let height = width / aspect;
+        
+        if (height > clientHeight) {
+          height = clientHeight;
+          width = height * aspect;
+        }
+        
+        setContainerDimensions({ width, height });
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    return () => window.removeEventListener('resize', handleResize);
+  }, [pdfDimensions, combinedImageDataUrl]);
+
+  const processUploadedPDF = async (buffer: ArrayBuffer) => {
+    setIsLoading(true);
+    setRenderingProgress(0);
+    setCombinedImageDataUrl(null);
+    setNumTotalPages(0);
+    
+    try {
+      const pdf = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
+      const numPages = pdf.numPages;
+      setNumTotalPages(numPages);
+
+      // First page establishes dimensions
+      const firstPage = await pdf.getPage(1);
+      const baseViewport = firstPage.getViewport({ scale: 1.0 });
+      setPdfDimensions({ width: baseViewport.width, height: baseViewport.height });
+      
+      const renderScale = 1.5;
+      const viewport = firstPage.getViewport({ scale: renderScale });
+      
+      const combinedCanvas = document.createElement('canvas');
+      combinedCanvas.width = viewport.width;
+      combinedCanvas.height = viewport.height;
+      const ctx = combinedCanvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      
+      // White background base
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, combinedCanvas.width, combinedCanvas.height);
+      
+      // We will multiply pages on top. Adjust alpha dynamically so large PDFs
+      // don't turn completely black, but stay dark enough for a single outline to show.
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = Math.max(0.05, 1 / Math.min(numPages, 10));
+
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = viewport.width;
+      pageCanvas.height = viewport.height;
+      const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
+      if (!pageCtx) return;
+
+      for (let i = 1; i <= numPages; i++) {
+        const page = await pdf.getPage(i);
+        
+        // Ensure page canvas is cleared and has white background
+        pageCtx.globalCompositeOperation = 'source-over';
+        pageCtx.globalAlpha = 1.0;
+        pageCtx.fillStyle = 'white';
+        pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+
+        const renderContext = {
+          canvasContext: pageCtx,
+          viewport: page.getViewport({ scale: renderScale })
+        };
+
+        await page.render(renderContext).promise;
+        
+        ctx.drawImage(pageCanvas, 0, 0);
+        
+        setRenderingProgress(Math.round((i / numPages) * 100));
+        // Quick yield to main thread to prevent UI freezing and allow progress bar rendering
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+
+      // Save to a single JPEG data URL for memory-efficient DOM rendering
+      setCombinedImageDataUrl(combinedCanvas.toDataURL('image/jpeg', 0.8));
+    } catch (error) {
+      console.error("Error rendering PDF:", error);
+      alert("Failed to render PDF preview.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    setFile(file);
+    const buffer = await file.arrayBuffer();
+    setFileBuffer(buffer);
+    await processUploadedPDF(buffer);
+  };
+
+  const handleCrop = async () => {
+    if (!fileBuffer || !pdfDimensions || !containerDimensions.width) return;
+    
+    setIsProcessing(true);
+    try {
+      const scaleFactor = pdfDimensions.width / containerDimensions.width;
+      
+      const pdfCropX = cropBox.x * scaleFactor;
+      const pdfCropY = pdfDimensions.height - ((cropBox.y + cropBox.height) * scaleFactor);
+      const pdfCropWidth = cropBox.width * scaleFactor;
+      const pdfCropHeight = cropBox.height * scaleFactor;
+
+      const pdfDoc = await PDFDocument.load(fileBuffer.slice(0));
+      const pages = pdfDoc.getPages();
+
+      pages.forEach(page => {
+        page.setCropBox(pdfCropX, pdfCropY, pdfCropWidth, pdfCropHeight);
+      });
+
+      const pdfBytes = await pdfDoc.save();
+      const blob = new Blob([pdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      
+      const downloadLink = document.createElement('a');
+      downloadLink.href = url;
+      downloadLink.download = `cropped_${file?.name || 'document.pdf'}`;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Failed to crop", e);
+      alert("Failed to crop PDF.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-[#f5f5f5] text-slate-900 font-sans overflow-hidden">
+      {/* Sidebar Controls */}
+      <div className="w-[320px] bg-white border-r border-[#e5e5e5] flex flex-col shadow-sm z-20">
+        <div className="p-6 border-b border-[#e5e5e5]">
+          <h1 className="text-2xl font-semibold tracking-tight">PDF Cropper</h1>
+          <p className="text-sm text-slate-500 mt-1">Overlay and batch crop</p>
+        </div>
+        
+        <div className="p-6 flex-1 flex flex-col gap-6 overflow-y-auto">
+          {!fileBuffer && (
+            <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer group">
+              <UploadCloud className="w-8 h-8 text-slate-400 group-hover:text-blue-500 transition-colors mb-3" />
+              <span className="text-sm font-medium text-slate-600">Upload PDF</span>
+              <span className="text-xs text-slate-400 mt-1">Support large files</span>
+              <input type="file" accept=".pdf" className="hidden" onChange={handleFileUpload} />
+            </label>
+          )}
+
+          {fileBuffer && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <FileUp className="w-5 h-5 text-blue-500 flex-shrink-0" />
+                <div className="overflow-hidden">
+                  <p className="text-sm font-medium truncate">{file?.name}</p>
+                  <p className="text-xs text-slate-500">{numTotalPages} Pages</p>
+                </div>
+              </div>
+              
+              <div className="flex gap-2">
+                <label className="flex-1">
+                  <div className="inline-flex w-full items-center justify-center py-2 px-4 rounded-lg bg-white border border-slate-300 hover:bg-slate-50 text-sm font-medium cursor-pointer transition-colors text-slate-700">
+                    Replace File
+                  </div>
+                  <input type="file" accept=".pdf" className="hidden" onChange={handleFileUpload} />
+                </label>
+              </div>
+
+              <div className="mt-8">
+                <div className="mb-4">
+                  <h3 className="text-sm font-semibold mb-1 text-slate-700">Crop Area</h3>
+                  <p className="text-xs text-slate-500 mb-2">Adjust the rectangle on the right. It applies to all pages.</p>
+                </div>
+                
+                <button
+                  onClick={handleCrop}
+                  disabled={isProcessing || isLoading || !combinedImageDataUrl}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+                >
+                  {isProcessing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Scissors className="w-4 h-4" />
+                      Crop & Download
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main Canvas Area */}
+      <div className="flex-1 flex flex-col overflow-hidden relative" ref={containerRef}>
+        {!fileBuffer ? (
+          <div className="m-auto text-center flex flex-col items-center justify-center">
+            <div className="w-20 h-20 rounded-full bg-blue-50 flex items-center justify-center mb-4">
+              <UploadCloud className="w-8 h-8 text-blue-500" />
+            </div>
+            <h2 className="text-xl font-medium text-slate-700">No PDF Loaded</h2>
+            <p className="text-slate-500 mt-2 max-w-sm">Upload a PDF to see all pages overlaid with transparency and crop them at once.</p>
+          </div>
+        ) : isLoading ? (
+          <div className="m-auto text-center flex flex-col items-center justify-center">
+            <Loader2 className="w-10 h-10 animate-spin text-blue-500 mb-4" />
+            <h2 className="text-xl font-medium text-slate-700">Rendering Pages... {renderingProgress}%</h2>
+            <div className="w-64 h-2 bg-slate-200 rounded-full mt-4 overflow-hidden">
+              <div 
+                className="h-full bg-blue-500 transition-all duration-200" 
+                style={{ width: `${renderingProgress}%` }} 
+              />
+            </div>
+            <p className="text-slate-500 mt-4 text-sm">Processing all {numTotalPages || '...'} pages sequentially</p>
+          </div>
+        ) : (
+          <div className="w-full h-full p-8 flex items-center justify-center overflow-auto relative bg-[#e5e5e5] pattern-dots">
+            {/* The document container */}
+            <div 
+              className="relative bg-white shadow-2xl" 
+              style={{
+                width: containerDimensions.width,
+                height: containerDimensions.height,
+              }}
+            >
+              {combinedImageDataUrl && (
+                <img
+                  src={combinedImageDataUrl}
+                  alt="Combined Pages"
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                />
+              )}
+
+              <CropBox 
+                containerWidth={containerDimensions.width}
+                containerHeight={containerDimensions.height}
+                onChange={setCropBox}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+      
+      <style>{`
+        .pattern-dots {
+          background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+          background-size: 20px 20px;
+        }
+      `}</style>
+    </div>
+  );
+}
+
