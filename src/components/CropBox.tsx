@@ -10,6 +10,15 @@ interface CropBoxProps {
   onChange: (box: { x: number; y: number; width: number; height: number }) => void;
   /** Whether to show the original PDF page border */
   showOriginalBorder?: boolean;
+  /**
+   * When true, all four margins are kept equal during handle drags.
+   * Free-move drag is disabled. Requires pxPerMmX / pxPerMmY to work correctly.
+   */
+  locked?: boolean;
+  /** Pixels per millimetre along the X axis (containerWidth / pdfWidthMm) */
+  pxPerMmX?: number;
+  /** Pixels per millimetre along the Y axis (containerHeight / pdfHeightMm) */
+  pxPerMmY?: number;
 }
 
 export function CropBox({
@@ -19,6 +28,9 @@ export function CropBox({
   controlledBox,
   onChange,
   showOriginalBorder = false,
+  locked = false,
+  pxPerMmX,
+  pxPerMmY,
 }: CropBoxProps) {
   const defaultBox = () => ({
     x: containerWidth * 0.1,
@@ -60,6 +72,8 @@ export function CropBox({
   }, [box, onChange]);
 
   const handlePointerDown = (e: React.PointerEvent, mode: string) => {
+    // When locked, move drag is not allowed; handle resizing is still allowed
+    if (locked && mode === 'move') return;
     e.stopPropagation();
     setIsDragging(true);
     dragMode.current = mode;
@@ -83,7 +97,49 @@ export function CropBox({
     reqRef.current = requestAnimationFrame(() => {
       let newBox = { ...startBox };
 
-      if (dragMode.current === 'move') {
+      if (locked && pxPerMmX && pxPerMmY) {
+        // Equal-margin mode: derive the new margin (in mm) from the dragged side,
+        // then apply it symmetrically to all four sides.
+        let marginMmX: number | null = null;
+        let marginMmY: number | null = null;
+
+        if (dragMode.current?.includes('left')) {
+          const newLeftPx = Math.max(0, Math.min(startBox.x + startBox.width - 20, startBox.x + dx));
+          marginMmX = newLeftPx / pxPerMmX;
+        }
+        if (dragMode.current?.includes('right')) {
+          const newRightEdgePx = startBox.x + Math.max(20, Math.min(containerWidth - startBox.x, startBox.width + dx));
+          marginMmX = Math.max(0, containerWidth - newRightEdgePx) / pxPerMmX;
+        }
+        if (dragMode.current?.includes('top')) {
+          const newTopPx = Math.max(0, Math.min(startBox.y + startBox.height - 20, startBox.y + dy));
+          marginMmY = newTopPx / pxPerMmY;
+        }
+        if (dragMode.current?.includes('bottom')) {
+          const newBottomEdgePx = startBox.y + Math.max(20, Math.min(containerHeight - startBox.y, startBox.height + dy));
+          marginMmY = Math.max(0, containerHeight - newBottomEdgePx) / pxPerMmY;
+        }
+
+        // If both axes changed (corner handle), average them for a single equal margin.
+        let marginMm = 0;
+        if (marginMmX !== null && marginMmY !== null) {
+          marginMm = (marginMmX + marginMmY) / 2;
+        } else if (marginMmX !== null) {
+          marginMm = marginMmX;
+        } else if (marginMmY !== null) {
+          marginMm = marginMmY;
+        }
+        marginMm = Math.max(0, marginMm);
+
+        const leftPx   = marginMm * pxPerMmX;
+        const topPx    = marginMm * pxPerMmY;
+        newBox = {
+          x: leftPx,
+          y: topPx,
+          width:  Math.max(20, containerWidth  - 2 * leftPx),
+          height: Math.max(20, containerHeight - 2 * topPx),
+        };
+      } else if (dragMode.current === 'move') {
         newBox.x = Math.max(0, Math.min(containerWidth - newBox.width, startBox.x + dx));
         newBox.y = Math.max(0, Math.min(containerHeight - newBox.height, startBox.y + dy));
       } else {
@@ -193,7 +249,7 @@ export function CropBox({
       <div
         className={cn(
           'absolute border-2 border-blue-500 ring-1 ring-white/50 shadow-[0_0_15px_rgba(0,0,0,0.2)] bg-blue-500/10',
-          isDragging ? 'pointer-events-auto' : 'pointer-events-auto cursor-move'
+          locked ? 'pointer-events-auto cursor-default' : (isDragging ? 'pointer-events-auto' : 'pointer-events-auto cursor-move')
         )}
         style={{
           left: box.x,

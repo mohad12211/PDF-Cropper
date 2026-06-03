@@ -428,16 +428,7 @@ export default function App() {
                 </p>
               </div>
             </div>
-            {/* Row 2: Cropped away per side */}
-            <div className="px-3 py-2 bg-orange-50 border-t border-slate-200">
-              <p className="font-semibold text-orange-400 uppercase tracking-wider text-[10px] mb-1">Cropped away</p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-                <DimRow label="Top"    value={dimInfo.cropTop}    unit="mm" color="text-orange-700" />
-                <DimRow label="Right"  value={dimInfo.cropRight}  unit="mm" color="text-orange-700" />
-                <DimRow label="Bottom" value={dimInfo.cropBottom} unit="mm" color="text-orange-700" />
-                <DimRow label="Left"   value={dimInfo.cropLeft}   unit="mm" color="text-orange-700" />
-              </div>
-            </div>
+
           </div>
         )}
       </div>
@@ -485,6 +476,9 @@ export default function App() {
                 onChange={setCropBox}
                 controlledBox={controlledBox}
                 showOriginalBorder={true}
+                locked={lockEqual}
+                pxPerMmX={pdfDimensions ? containerDimensions.width / ptToMm(pdfDimensions.width) : undefined}
+                pxPerMmY={pdfDimensions ? containerDimensions.height / ptToMm(pdfDimensions.height) : undefined}
               />
             </div>
           </div>
@@ -511,13 +505,23 @@ function MarginField({
   value: number;
   onChange: (v: string) => void;
 }) {
+  const [focused, setFocused] = React.useState(false);
+  // While focused show raw value so the user can edit freely;
+  // while blurred show the rounded 2-dp display value.
+  const displayValue = focused
+    ? (value === 0 ? '' : value)
+    : (value === 0 ? '' : parseFloat(value.toFixed(2)));
+
   return (
     <div className="flex flex-col items-center gap-0.5">
       <input
         type="number"
         min={0}
-        value={value === 0 ? '' : value}
+        step="0.01"
+        value={displayValue}
         placeholder="0"
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         onChange={(e) => onChange(e.target.value)}
         className="w-full text-center text-sm border border-slate-300 rounded-md py-1.5 px-1 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
       />
