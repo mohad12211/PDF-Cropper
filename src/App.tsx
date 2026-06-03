@@ -9,6 +9,19 @@ import { cn } from './lib/utils';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
+const PT_TO_MM = 25.4 / 72; // 1 PDF point in millimetres
+const MM_TO_PT = 72 / 25.4; // 1 mm in PDF points
+
+function ptToMm(pt: number) {
+  return pt * PT_TO_MM;
+}
+function mmToPt(mm: number) {
+  return mm * MM_TO_PT;
+}
+function fmt(mm: number) {
+  return mm.toFixed(1);
+}
+
 interface MarginInputs {
   top: number;
   bottom: number;
@@ -209,10 +222,10 @@ export default function App() {
     (m: MarginInputs) => {
       if (!containerDimensions.width || !containerDimensions.height) return;
 
-      const leftPx = ptToPx(m.left, 'x');
-      const rightPx = ptToPx(m.right, 'x');
-      const topPx = ptToPx(m.top, 'y');
-      const bottomPx = ptToPx(m.bottom, 'y');
+      const leftPx   = ptToPx(mmToPt(m.left),   'x');
+      const rightPx  = ptToPx(mmToPt(m.right),  'x');
+      const topPx    = ptToPx(mmToPt(m.top),    'y');
+      const bottomPx = ptToPx(mmToPt(m.bottom), 'y');
 
       const newBox = {
         x: leftPx,
@@ -288,7 +301,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-semibold text-slate-700">Equal Crop Margins</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Enter crop amount in PDF points</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Enter crop amount in mm</p>
                   </div>
                   <button
                     title={lockEqual ? 'Unlock sides' : 'Lock all sides equal'}
@@ -362,6 +375,52 @@ export default function App() {
                   )}
                 </button>
               </div>
+
+              {/* ── Dimension Info Panel ─────────────────────────────── */}
+              {pdfDimensions && containerDimensions.width > 0 && (() => {
+                const sf = pdfDimensions.width / containerDimensions.width;
+                const origW = ptToMm(pdfDimensions.width);
+                const origH = ptToMm(pdfDimensions.height);
+
+                const cropLeft   = ptToMm(cropBox.x * sf);
+                const cropTop    = ptToMm(cropBox.y * sf);
+                const cropRight  = ptToMm((containerDimensions.width  - cropBox.x - cropBox.width)  * sf);
+                const cropBottom = ptToMm((containerDimensions.height - cropBox.y - cropBox.height) * sf);
+
+                const resultW = ptToMm(cropBox.width  * sf);
+                const resultH = ptToMm(cropBox.height * sf);
+
+                return (
+                  <div className="mt-2 rounded-xl border border-slate-200 overflow-hidden text-xs">
+                    {/* Original */}
+                    <div className="px-3 py-2 bg-slate-50 border-b border-slate-200">
+                      <p className="font-semibold text-slate-500 uppercase tracking-wider text-[10px] mb-1">Original</p>
+                      <p className="font-mono text-slate-800 font-medium">
+                        {fmt(origW)} × {fmt(origH)} mm
+                      </p>
+                    </div>
+
+                    {/* Crop amounts */}
+                    <div className="px-3 py-2 bg-orange-50 border-b border-slate-200">
+                      <p className="font-semibold text-orange-500 uppercase tracking-wider text-[10px] mb-1.5">Cropped away</p>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        <DimRow label="Top"    value={cropTop}    unit="mm" color="text-orange-700" />
+                        <DimRow label="Bottom" value={cropBottom} unit="mm" color="text-orange-700" />
+                        <DimRow label="Left"   value={cropLeft}   unit="mm" color="text-orange-700" />
+                        <DimRow label="Right"  value={cropRight}  unit="mm" color="text-orange-700" />
+                      </div>
+                    </div>
+
+                    {/* Result */}
+                    <div className="px-3 py-2 bg-emerald-50">
+                      <p className="font-semibold text-emerald-600 uppercase tracking-wider text-[10px] mb-1">After crop</p>
+                      <p className="font-mono text-emerald-800 font-medium">
+                        {fmt(resultW)} × {fmt(resultH)} mm
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -446,7 +505,19 @@ function MarginField({
         onChange={(e) => onChange(e.target.value)}
         className="w-full text-center text-sm border border-slate-300 rounded-md py-1.5 px-1 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
       />
-      <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">{label}</span>
+      <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">{label} mm</span>
+    </div>
+  );
+}
+
+// ── Dimension row (label + value) ───────────────────────────────────────────────────
+function DimRow({ label, value, unit, color }: { label: string; value: number; unit: string; color: string }) {
+  return (
+    <div className="flex items-center justify-between gap-1">
+      <span className="text-slate-500">{label}</span>
+      <span className={`font-mono font-semibold tabular-nums ${color}`}>
+        {value.toFixed(1)} <span className="font-normal text-[10px]">{unit}</span>
+      </span>
     </div>
   );
 }
