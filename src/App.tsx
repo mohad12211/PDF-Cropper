@@ -19,7 +19,7 @@ function mmToPt(mm: number) {
   return mm * MM_TO_PT;
 }
 function fmt(mm: number) {
-  return mm.toFixed(1);
+  return mm.toFixed(2);
 }
 
 interface MarginInputs {
@@ -516,7 +516,7 @@ function DimRow({ label, value, unit, color }: { label: string; value: number; u
     <div className="flex items-center justify-between gap-1">
       <span className="text-slate-500">{label}</span>
       <span className={`font-mono font-semibold tabular-nums ${color}`}>
-        {value.toFixed(1)} <span className="font-normal text-[10px]">{unit}</span>
+        {value.toFixed(2)}&nbsp;<span className="font-normal text-[10px]">{unit}</span>
       </span>
     </div>
   );
