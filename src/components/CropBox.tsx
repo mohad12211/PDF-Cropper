@@ -5,37 +5,55 @@ interface CropBoxProps {
   containerWidth: number;
   containerHeight: number;
   initialBox?: { x: number; y: number; width: number; height: number };
+  /** When provided, this becomes a controlled value from outside (e.g. equal-crop inputs) */
+  controlledBox?: { x: number; y: number; width: number; height: number } | null;
   onChange: (box: { x: number; y: number; width: number; height: number }) => void;
+  /** Whether to show the original PDF page border */
+  showOriginalBorder?: boolean;
 }
 
-export function CropBox({ containerWidth, containerHeight, initialBox, onChange }: CropBoxProps) {
-  const [box, setBox] = useState(initialBox || {
+export function CropBox({
+  containerWidth,
+  containerHeight,
+  initialBox,
+  controlledBox,
+  onChange,
+  showOriginalBorder = false,
+}: CropBoxProps) {
+  const defaultBox = () => ({
     x: containerWidth * 0.1,
     y: containerHeight * 0.1,
     width: containerWidth * 0.8,
-    height: containerHeight * 0.8
+    height: containerHeight * 0.8,
   });
+
+  const [box, setBox] = useState(initialBox || defaultBox());
 
   const [isDragging, setIsDragging] = useState(false);
   const dragMode = useRef<string | null>(null);
-  const dragStartInfo = useRef<{ startX: number, startY: number, startBox: typeof box } | null>(null);
+  const dragStartInfo = useRef<{ startX: number; startY: number; startBox: typeof box } | null>(null);
   const reqRef = useRef<number | null>(null);
 
   // Use a ref for the box to avoid dependency cycles during active dragging
   const boxRef = useRef(box);
 
+  // Reset box when container size changes (new file loaded)
   useEffect(() => {
     if (!initialBox && containerWidth > 0 && containerHeight > 0) {
-      const newBox = {
-        x: containerWidth * 0.1,
-        y: containerHeight * 0.1,
-        width: containerWidth * 0.8,
-        height: containerHeight * 0.8
-      };
+      const newBox = defaultBox();
       setBox(newBox);
       boxRef.current = newBox;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerWidth, containerHeight]);
+
+  // Sync when a controlled box is pushed in from outside (equal-crop panel)
+  useEffect(() => {
+    if (controlledBox) {
+      setBox(controlledBox);
+      boxRef.current = controlledBox;
+    }
+  }, [controlledBox]);
 
   useEffect(() => {
     onChange(box);
@@ -49,7 +67,7 @@ export function CropBox({ containerWidth, containerHeight, initialBox, onChange 
     dragStartInfo.current = {
       startX: e.clientX,
       startY: e.clientY,
-      startBox: { ...boxRef.current }
+      startBox: { ...boxRef.current },
     };
   };
 
@@ -59,10 +77,9 @@ export function CropBox({ containerWidth, containerHeight, initialBox, onChange 
     const dx = e.clientX - dragStartInfo.current.startX;
     const dy = e.clientY - dragStartInfo.current.startY;
     const { startBox } = dragStartInfo.current;
-    
-    // Use requestAnimationFrame to throttle state updates for smooth dragging
+
     if (reqRef.current) cancelAnimationFrame(reqRef.current);
-    
+
     reqRef.current = requestAnimationFrame(() => {
       let newBox = { ...startBox };
 
@@ -72,7 +89,7 @@ export function CropBox({ containerWidth, containerHeight, initialBox, onChange 
       } else {
         if (dragMode.current?.includes('left')) {
           const targetX = Math.min(startBox.x + startBox.width - 20, Math.max(0, startBox.x + dx));
-          newBox.width += (startBox.x - targetX);
+          newBox.width += startBox.x - targetX;
           newBox.x = targetX;
         }
         if (dragMode.current?.includes('right')) {
@@ -80,7 +97,7 @@ export function CropBox({ containerWidth, containerHeight, initialBox, onChange 
         }
         if (dragMode.current?.includes('top')) {
           const targetY = Math.min(startBox.y + startBox.height - 20, Math.max(0, startBox.y + dy));
-          newBox.height += (startBox.y - targetY);
+          newBox.height += startBox.y - targetY;
           newBox.y = targetY;
         }
         if (dragMode.current?.includes('bottom')) {
@@ -112,16 +129,71 @@ export function CropBox({ containerWidth, containerHeight, initialBox, onChange 
 
   return (
     <div className="absolute inset-0 z-10 pointer-events-none" style={{ width: containerWidth, height: containerHeight }}>
-      {/* 4 separate divs for overlay instead of clip-path for much better performance */}
+      {/* Original PDF page border indicator */}
+      {showOriginalBorder && (
+        <>
+          {/* Pulsing corner markers */}
+          {[
+            { top: -1, left: -1 },
+            { top: -1, right: -1 },
+            { bottom: -1, left: -1 },
+            { bottom: -1, right: -1 },
+          ].map((pos, i) => (
+            <div
+              key={i}
+              className="absolute w-4 h-4 pointer-events-none z-20"
+              style={{
+                ...pos,
+                borderTop: pos.top !== undefined ? '3px solid #f97316' : undefined,
+                borderBottom: pos.bottom !== undefined ? '3px solid #f97316' : undefined,
+                borderLeft: pos.left !== undefined ? '3px solid #f97316' : undefined,
+                borderRight: pos.right !== undefined ? '3px solid #f97316' : undefined,
+              }}
+            />
+          ))}
+          {/* Dashed border around full PDF area */}
+          <div
+            className="absolute inset-0 pointer-events-none z-20"
+            style={{
+              outline: '2px dashed #f97316',
+              outlineOffset: '-1px',
+              boxShadow: '0 0 0 1px rgba(249,115,22,0.15), inset 0 0 0 1px rgba(249,115,22,0.15)',
+            }}
+          />
+          {/* Label */}
+          <div
+            className="absolute pointer-events-none z-30 select-none"
+            style={{ top: 6, left: 8 }}
+          >
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.05em',
+                color: '#f97316',
+                background: 'rgba(255,255,255,0.85)',
+                padding: '1px 5px',
+                borderRadius: 3,
+                border: '1px solid rgba(249,115,22,0.4)',
+              }}
+            >
+              ORIGINAL
+            </span>
+          </div>
+        </>
+      )}
+
+      {/* 4 dark overlay panels around the crop box */}
       <div className="absolute bg-black/40 pointer-events-none" style={{ top: 0, left: 0, right: 0, height: box.y }} />
       <div className="absolute bg-black/40 pointer-events-none" style={{ top: box.y, bottom: containerHeight - (box.y + box.height), left: 0, width: box.x }} />
       <div className="absolute bg-black/40 pointer-events-none" style={{ top: box.y, bottom: containerHeight - (box.y + box.height), right: 0, left: box.x + box.width }} />
       <div className="absolute bg-black/40 pointer-events-none" style={{ bottom: 0, left: 0, right: 0, top: box.y + box.height }} />
 
+      {/* Crop box */}
       <div
         className={cn(
-          "absolute border-2 border-blue-500 ring-1 ring-white/50 shadow-[0_0_15px_rgba(0,0,0,0.2)] bg-blue-500/10",
-          isDragging ? "pointer-events-auto" : "pointer-events-auto cursor-move"
+          'absolute border-2 border-blue-500 ring-1 ring-white/50 shadow-[0_0_15px_rgba(0,0,0,0.2)] bg-blue-500/10',
+          isDragging ? 'pointer-events-auto' : 'pointer-events-auto cursor-move'
         )}
         style={{
           left: box.x,
@@ -144,7 +216,7 @@ export function CropBox({ containerWidth, containerHeight, initialBox, onChange 
               bottom: h.bottom,
               marginTop: h.mt,
               marginLeft: h.ml,
-              cursor: h.cursor
+              cursor: h.cursor,
             }}
             onPointerDown={(e) => handlePointerDown(e, h.mode)}
             onPointerMove={handlePointerMove}
