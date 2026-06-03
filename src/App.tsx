@@ -48,6 +48,9 @@ export default function App() {
   const [lockEqual, setLockEqual] = useState(false);
   // When non-null, this drives CropBox from outside
   const [controlledBox, setControlledBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  // Prevents feedback loop: when we push a controlledBox in, the resulting
+  // cropBox onChange must NOT overwrite the margin inputs
+  const isControlledUpdate = useRef(false);
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +84,24 @@ export default function App() {
       setControlledBox(null);
     }
   }, [combinedImageDataUrl]);
+
+  // Sync margin inputs when the crop box is moved by dragging
+  useEffect(() => {
+    if (isControlledUpdate.current) {
+      // This cropBox change came from our own input → don't overwrite inputs
+      isControlledUpdate.current = false;
+      return;
+    }
+    if (!pdfDimensions || !containerDimensions.width) return;
+    const sf = pdfDimensions.width / containerDimensions.width;
+    setMargins({
+      left:   Math.max(0, ptToMm(cropBox.x * sf)),
+      top:    Math.max(0, ptToMm(cropBox.y * sf)),
+      right:  Math.max(0, ptToMm((containerDimensions.width  - cropBox.x - cropBox.width)  * sf)),
+      bottom: Math.max(0, ptToMm((containerDimensions.height - cropBox.y - cropBox.height) * sf)),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cropBox]);
 
   const processUploadedPDF = async (buffer: ArrayBuffer) => {
     setIsLoading(true);
@@ -233,6 +254,7 @@ export default function App() {
         width: Math.max(10, containerDimensions.width - leftPx - rightPx),
         height: Math.max(10, containerDimensions.height - topPx - bottomPx),
       };
+      isControlledUpdate.current = true;
       setControlledBox(newBox);
     },
     [ptToPx, containerDimensions],
@@ -258,6 +280,21 @@ export default function App() {
 
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Compute dimension info (used both in sidebar and pinned panel)
+  const dimInfo = pdfDimensions && containerDimensions.width > 0 ? (() => {
+    const sf = pdfDimensions.width / containerDimensions.width;
+    return {
+      origW:      ptToMm(pdfDimensions.width),
+      origH:      ptToMm(pdfDimensions.height),
+      cropLeft:   Math.max(0, ptToMm(cropBox.x * sf)),
+      cropTop:    Math.max(0, ptToMm(cropBox.y * sf)),
+      cropRight:  Math.max(0, ptToMm((containerDimensions.width  - cropBox.x - cropBox.width)  * sf)),
+      cropBottom: Math.max(0, ptToMm((containerDimensions.height - cropBox.y - cropBox.height) * sf)),
+      resultW:    ptToMm(cropBox.width  * sf),
+      resultH:    ptToMm(cropBox.height * sf),
+    };
+  })() : null;
+
   return (
     <div className="flex h-screen bg-[#f5f5f5] text-slate-900 font-sans overflow-hidden">
       {/* Sidebar Controls */}
@@ -267,7 +304,8 @@ export default function App() {
           <p className="text-sm text-slate-500 mt-1">Overlay and batch crop</p>
         </div>
 
-        <div className="p-6 flex-1 flex flex-col gap-6 overflow-y-auto">
+        {/* Scrollable controls */}
+        <div className="p-6 flex-1 flex flex-col gap-6 overflow-y-auto min-h-0">
           {!fileBuffer && (
             <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-slate-300 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer group">
               <UploadCloud className="w-8 h-8 text-slate-400 group-hover:text-blue-500 transition-colors mb-3" />
@@ -320,23 +358,16 @@ export default function App() {
 
                 {/* Visual margin layout */}
                 <div className="grid grid-cols-3 gap-2 items-center">
-                  {/* Top row */}
                   <div />
-                  <MarginField label="Top" value={margins.top} onChange={(v) => handleMarginChange('top', v)} />
+                  <MarginField label="Top"    value={margins.top}    onChange={(v) => handleMarginChange('top', v)} />
                   <div />
 
-                  {/* Middle row */}
-                  <MarginField label="Left" value={margins.left} onChange={(v) => handleMarginChange('left', v)} />
-                  {/* Center diagram */}
+                  <MarginField label="Left"   value={margins.left}   onChange={(v) => handleMarginChange('left', v)} />
                   <div className="flex items-center justify-center">
-                    <div
-                      className="w-10 h-10 rounded border-2 border-slate-300 bg-slate-100"
-                      style={{ boxShadow: 'inset 0 0 0 3px white' }}
-                    />
+                    <div className="w-10 h-10 rounded border-2 border-slate-300 bg-slate-100" style={{ boxShadow: 'inset 0 0 0 3px white' }} />
                   </div>
-                  <MarginField label="Right" value={margins.right} onChange={(v) => handleMarginChange('right', v)} />
+                  <MarginField label="Right"  value={margins.right}  onChange={(v) => handleMarginChange('right', v)} />
 
-                  {/* Bottom row */}
                   <div />
                   <MarginField label="Bottom" value={margins.bottom} onChange={(v) => handleMarginChange('bottom', v)} />
                   <div />
@@ -375,55 +406,40 @@ export default function App() {
                   )}
                 </button>
               </div>
-
-              {/* ── Dimension Info Panel ─────────────────────────────── */}
-              {pdfDimensions && containerDimensions.width > 0 && (() => {
-                const sf = pdfDimensions.width / containerDimensions.width;
-                const origW = ptToMm(pdfDimensions.width);
-                const origH = ptToMm(pdfDimensions.height);
-
-                const cropLeft   = ptToMm(cropBox.x * sf);
-                const cropTop    = ptToMm(cropBox.y * sf);
-                const cropRight  = ptToMm((containerDimensions.width  - cropBox.x - cropBox.width)  * sf);
-                const cropBottom = ptToMm((containerDimensions.height - cropBox.y - cropBox.height) * sf);
-
-                const resultW = ptToMm(cropBox.width  * sf);
-                const resultH = ptToMm(cropBox.height * sf);
-
-                return (
-                  <div className="mt-2 rounded-xl border border-slate-200 overflow-hidden text-xs">
-                    {/* Original */}
-                    <div className="px-3 py-2 bg-slate-50 border-b border-slate-200">
-                      <p className="font-semibold text-slate-500 uppercase tracking-wider text-[10px] mb-1">Original</p>
-                      <p className="font-mono text-slate-800 font-medium">
-                        {fmt(origW)} × {fmt(origH)} mm
-                      </p>
-                    </div>
-
-                    {/* Crop amounts */}
-                    <div className="px-3 py-2 bg-orange-50 border-b border-slate-200">
-                      <p className="font-semibold text-orange-500 uppercase tracking-wider text-[10px] mb-1.5">Cropped away</p>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                        <DimRow label="Top"    value={cropTop}    unit="mm" color="text-orange-700" />
-                        <DimRow label="Bottom" value={cropBottom} unit="mm" color="text-orange-700" />
-                        <DimRow label="Left"   value={cropLeft}   unit="mm" color="text-orange-700" />
-                        <DimRow label="Right"  value={cropRight}  unit="mm" color="text-orange-700" />
-                      </div>
-                    </div>
-
-                    {/* Result */}
-                    <div className="px-3 py-2 bg-emerald-50">
-                      <p className="font-semibold text-emerald-600 uppercase tracking-wider text-[10px] mb-1">After crop</p>
-                      <p className="font-mono text-emerald-800 font-medium">
-                        {fmt(resultW)} × {fmt(resultH)} mm
-                      </p>
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
           )}
         </div>
+
+        {/* ── Dimension Info — pinned at the bottom, always visible ── */}
+        {dimInfo && (
+          <div className="border-t border-slate-200 bg-white text-xs flex-shrink-0">
+            {/* Row 1: Original + After crop */}
+            <div className="grid grid-cols-2 divide-x divide-slate-200">
+              <div className="px-3 py-2 bg-slate-50">
+                <p className="font-semibold text-slate-400 uppercase tracking-wider text-[10px] mb-0.5">Original</p>
+                <p className="font-mono text-slate-700 font-medium leading-tight">
+                  {fmt(dimInfo.origW)}<br />{fmt(dimInfo.origH)} mm
+                </p>
+              </div>
+              <div className="px-3 py-2 bg-emerald-50">
+                <p className="font-semibold text-emerald-500 uppercase tracking-wider text-[10px] mb-0.5">After crop</p>
+                <p className="font-mono text-emerald-800 font-medium leading-tight">
+                  {fmt(dimInfo.resultW)}<br />{fmt(dimInfo.resultH)} mm
+                </p>
+              </div>
+            </div>
+            {/* Row 2: Cropped away per side */}
+            <div className="px-3 py-2 bg-orange-50 border-t border-slate-200">
+              <p className="font-semibold text-orange-400 uppercase tracking-wider text-[10px] mb-1">Cropped away</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                <DimRow label="Top"    value={dimInfo.cropTop}    unit="mm" color="text-orange-700" />
+                <DimRow label="Right"  value={dimInfo.cropRight}  unit="mm" color="text-orange-700" />
+                <DimRow label="Bottom" value={dimInfo.cropBottom} unit="mm" color="text-orange-700" />
+                <DimRow label="Left"   value={dimInfo.cropLeft}   unit="mm" color="text-orange-700" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Canvas Area */}
