@@ -15,6 +15,13 @@ interface CropBoxProps {
    * Free-move drag is disabled. Requires pxPerMmX / pxPerMmY to work correctly.
    */
   locked?: boolean;
+  /**
+   * When true, the crop result is constrained to the ISO √2 aspect ratio (h/w = √2 for portrait,
+   * w/h = √2 for landscape). Free-move drag is disabled when this is active.
+   */
+  lockRatio?: boolean;
+  /** Whether the source PDF is portrait (height ≥ width). Used by lockRatio. */
+  pdfIsPortrait?: boolean;
   /** Pixels per millimetre along the X axis (containerWidth / pdfWidthMm) */
   pxPerMmX?: number;
   /** Pixels per millimetre along the Y axis (containerHeight / pdfHeightMm) */
@@ -29,6 +36,8 @@ export function CropBox({
   onChange,
   showOriginalBorder = false,
   locked = false,
+  lockRatio = false,
+  pdfIsPortrait = true,
   pxPerMmX,
   pxPerMmY,
 }: CropBoxProps) {
@@ -72,8 +81,8 @@ export function CropBox({
   }, [box, onChange]);
 
   const handlePointerDown = (e: React.PointerEvent, mode: string) => {
-    // When locked, move drag is not allowed; handle resizing is still allowed
-    if (locked && mode === 'move') return;
+    // When locked or ratio-locked, move drag is not allowed; handle resizing is still allowed
+    if ((locked || lockRatio) && mode === 'move') return;
     e.stopPropagation();
     setIsDragging(true);
     dragMode.current = mode;
@@ -139,6 +148,71 @@ export function CropBox({
           width:  Math.max(20, containerWidth  - 2 * leftPx),
           height: Math.max(20, containerHeight - 2 * topPx),
         };
+      } else if (lockRatio) {
+        // √2-ratio mode: allow free resizing but snap to ISO aspect ratio.
+        // The dragged side drives the size on its axis; the other axis is derived.
+        const SQRT2 = Math.SQRT2;
+        // targetRatio = h / w
+        const targetRatio = pdfIsPortrait ? SQRT2 : 1 / SQRT2;
+
+        const mode = dragMode.current ?? '';
+        const isHorizontal = mode.includes('left') || mode.includes('right');
+        const isVertical   = mode.includes('top')  || mode.includes('bottom');
+
+        // First compute the unconstrained new box on the dragged axis
+        if (mode.includes('left')) {
+          const targetX = Math.min(startBox.x + startBox.width - 20, Math.max(0, startBox.x + dx));
+          newBox.width += startBox.x - targetX;
+          newBox.x = targetX;
+        }
+        if (mode.includes('right')) {
+          newBox.width = Math.max(20, Math.min(containerWidth - startBox.x, startBox.width + dx));
+        }
+        if (mode.includes('top')) {
+          const targetY = Math.min(startBox.y + startBox.height - 20, Math.max(0, startBox.y + dy));
+          newBox.height += startBox.y - targetY;
+          newBox.y = targetY;
+        }
+        if (mode.includes('bottom')) {
+          newBox.height = Math.max(20, Math.min(containerHeight - startBox.y, startBox.height + dy));
+        }
+
+        // Now snap the non-dragged axis to preserve the √2 ratio.
+        // Corner handles: use the axis with the bigger movement as the reference.
+        if (isHorizontal && isVertical) {
+          // Corner: pick axis with larger delta
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            // Width is the reference → adjust height, keep top edge, extend bottom
+            newBox.height = newBox.width * targetRatio;
+          } else {
+            // Height is the reference → adjust width, keep left edge, extend right
+            newBox.width = newBox.height / targetRatio;
+          }
+        } else if (isHorizontal) {
+          // Width changed → adjust height symmetrically around centre
+          const centreY = startBox.y + startBox.height / 2;
+          newBox.height = newBox.width * targetRatio;
+          newBox.y = Math.max(0, centreY - newBox.height / 2);
+          // Clamp to container
+          if (newBox.y + newBox.height > containerHeight) {
+            newBox.y = containerHeight - newBox.height;
+          }
+        } else if (isVertical) {
+          // Height changed → adjust width symmetrically around centre
+          const centreX = startBox.x + startBox.width / 2;
+          newBox.width = newBox.height / targetRatio;
+          newBox.x = Math.max(0, centreX - newBox.width / 2);
+          // Clamp to container
+          if (newBox.x + newBox.width > containerWidth) {
+            newBox.x = containerWidth - newBox.width;
+          }
+        }
+
+        // Final safety clamp
+        newBox.width  = Math.max(20, Math.min(newBox.width,  containerWidth));
+        newBox.height = Math.max(20, Math.min(newBox.height, containerHeight));
+        newBox.x = Math.max(0, Math.min(newBox.x, containerWidth  - newBox.width));
+        newBox.y = Math.max(0, Math.min(newBox.y, containerHeight - newBox.height));
       } else if (dragMode.current === 'move') {
         newBox.x = Math.max(0, Math.min(containerWidth - newBox.width, startBox.x + dx));
         newBox.y = Math.max(0, Math.min(containerHeight - newBox.height, startBox.y + dy));

@@ -3,7 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 // Explicitly using the Vite way to load workers
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { PDFDocument } from 'pdf-lib';
-import { UploadCloud, Scissors, Loader2, FileUp, Lock, Unlock } from 'lucide-react';
+import { UploadCloud, Scissors, Loader2, FileUp, Lock, Unlock, RectangleHorizontal } from 'lucide-react';
 import { CropBox } from './components/CropBox';
 import { cn } from './lib/utils';
 
@@ -46,11 +46,15 @@ export default function App() {
   // ── Equal-crop state ──────────────────────────────────────────────────────
   const [margins, setMargins] = useState<MarginInputs>({ top: 0, bottom: 0, left: 0, right: 0 });
   const [lockEqual, setLockEqual] = useState(false);
+  /** Lock the result size to the ISO √2 aspect ratio (A-series paper: w:h = 1:√2) */
+  const [lockRatio, setLockRatio] = useState(false);
   // When non-null, this drives CropBox from outside
   const [controlledBox, setControlledBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   // Prevents feedback loop: when we push a controlledBox in, the resulting
   // cropBox onChange must NOT overwrite the margin inputs
   const isControlledUpdate = useRef(false);
+
+  const SQRT2 = Math.SQRT2; // ≈ 1.41421 — ISO paper ratio (short:long)
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -240,7 +244,7 @@ export default function App() {
   );
 
   const applyMargins = useCallback(
-    (m: MarginInputs) => {
+    (m: MarginInputs, enforceRatio = false) => {
       if (!containerDimensions.width || !containerDimensions.height) return;
 
       const leftPx   = ptToPx(mmToPt(m.left),   'x');
@@ -248,16 +252,39 @@ export default function App() {
       const topPx    = ptToPx(mmToPt(m.top),    'y');
       const bottomPx = ptToPx(mmToPt(m.bottom), 'y');
 
-      const newBox = {
-        x: leftPx,
-        y: topPx,
-        width: Math.max(10, containerDimensions.width - leftPx - rightPx),
-        height: Math.max(10, containerDimensions.height - topPx - bottomPx),
-      };
+      let w = Math.max(10, containerDimensions.width  - leftPx - rightPx);
+      let h = Math.max(10, containerDimensions.height - topPx  - bottomPx);
+      let x = leftPx;
+      let y = topPx;
+
+      if (enforceRatio && pdfDimensions) {
+        // Determine whether the original PDF is portrait or landscape
+        const pdfIsPortrait = pdfDimensions.height >= pdfDimensions.width;
+        // In portrait the result should be taller: h/w = √2  →  h = w*√2
+        // In landscape the result should be wider: w/h = √2  →  w = h*√2
+        const targetRatio = pdfIsPortrait ? SQRT2 : 1 / SQRT2; // h/w
+        const currentRatio = h / w;
+
+        if (currentRatio > targetRatio) {
+          // Too tall — shrink h, keep w, re-center vertically
+          const newH = w * targetRatio;
+          const surplus = h - newH;
+          y += surplus / 2;
+          h = newH;
+        } else {
+          // Too wide — shrink w, keep h, re-center horizontally
+          const newW = h / targetRatio;
+          const surplus = w - newW;
+          x += surplus / 2;
+          w = newW;
+        }
+      }
+
+      const newBox = { x, y, width: Math.max(10, w), height: Math.max(10, h) };
       isControlledUpdate.current = true;
       setControlledBox(newBox);
     },
-    [ptToPx, containerDimensions],
+    [ptToPx, containerDimensions, pdfDimensions, SQRT2],
   );
 
   const handleMarginChange = (side: keyof MarginInputs, raw: string) => {
@@ -269,13 +296,20 @@ export default function App() {
       next = { ...margins, [side]: val };
     }
     setMargins(next);
-    applyMargins(next);
+    applyMargins(next, lockRatio);
   };
 
   const handleResetMargins = () => {
     const reset: MarginInputs = { top: 0, bottom: 0, left: 0, right: 0 };
     setMargins(reset);
-    applyMargins(reset);
+    applyMargins(reset, lockRatio);
+  };
+
+  // When lockRatio is toggled, immediately re-apply current margins with the new setting
+  const handleToggleLockRatio = () => {
+    const next = !lockRatio;
+    setLockRatio(next);
+    applyMargins(margins, next);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -341,19 +375,34 @@ export default function App() {
                     <h3 className="text-sm font-semibold text-slate-700">Equal Crop Margins</h3>
                     <p className="text-xs text-slate-500 mt-0.5">Enter crop amount in mm</p>
                   </div>
-                  <button
-                    title={lockEqual ? 'Unlock sides' : 'Lock all sides equal'}
-                    onClick={() => setLockEqual((v) => !v)}
-                    className={cn(
-                      'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors border',
-                      lockEqual
-                        ? 'bg-blue-50 border-blue-300 text-blue-700'
-                        : 'bg-slate-50 border-slate-300 text-slate-600 hover:bg-slate-100',
-                    )}
-                  >
-                    {lockEqual ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                    {lockEqual ? 'Locked' : 'Lock'}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      title={lockRatio ? 'Unlock √2 ratio' : 'Lock result to √2 ratio (ISO paper)'}
+                      onClick={handleToggleLockRatio}
+                      className={cn(
+                        'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors border',
+                        lockRatio
+                          ? 'bg-violet-50 border-violet-300 text-violet-700'
+                          : 'bg-slate-50 border-slate-300 text-slate-600 hover:bg-slate-100',
+                      )}
+                    >
+                      <RectangleHorizontal className="w-3 h-3" />
+                      {lockRatio ? '√2' : '√2'}
+                    </button>
+                    <button
+                      title={lockEqual ? 'Unlock sides' : 'Lock all sides equal'}
+                      onClick={() => setLockEqual((v) => !v)}
+                      className={cn(
+                        'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors border',
+                        lockEqual
+                          ? 'bg-blue-50 border-blue-300 text-blue-700'
+                          : 'bg-slate-50 border-slate-300 text-slate-600 hover:bg-slate-100',
+                      )}
+                    >
+                      {lockEqual ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                      {lockEqual ? 'Locked' : 'Lock'}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Visual margin layout */}
@@ -426,6 +475,11 @@ export default function App() {
                 <p className="font-mono text-emerald-800 font-medium leading-tight">
                   {fmt(dimInfo.resultW)}<br />{fmt(dimInfo.resultH)} mm
                 </p>
+                {lockRatio && (
+                  <p className="text-[10px] font-semibold text-violet-500 mt-0.5">
+                    ratio {(dimInfo.resultH / dimInfo.resultW).toFixed(3)} ≈ √2
+                  </p>
+                )}
               </div>
             </div>
 
@@ -477,6 +531,8 @@ export default function App() {
                 controlledBox={controlledBox}
                 showOriginalBorder={true}
                 locked={lockEqual}
+                lockRatio={lockRatio}
+                pdfIsPortrait={pdfDimensions ? pdfDimensions.height >= pdfDimensions.width : true}
                 pxPerMmX={pdfDimensions ? containerDimensions.width / ptToMm(pdfDimensions.width) : undefined}
                 pxPerMmY={pdfDimensions ? containerDimensions.height / ptToMm(pdfDimensions.height) : undefined}
               />
