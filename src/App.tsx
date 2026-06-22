@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 // Explicitly using the Vite way to load workers
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName } from 'pdf-lib';
 import { UploadCloud, Scissors, Loader2, FileUp, Lock, Unlock, RectangleHorizontal } from 'lucide-react';
 import { CropBox } from './components/CropBox';
 import { cn } from './lib/utils';
@@ -206,7 +206,13 @@ export default function App() {
       const pages = pdfDoc.getPages();
 
       pages.forEach((page) => {
-        page.setCropBox(pdfCropX, pdfCropY, pdfCropWidth, pdfCropHeight);
+        // Shift content so the crop origin becomes (0,0), then resize the MediaBox
+        // to the cropped dimensions. This produces a truly resized page that every
+        // tool (pdfinfo, pdf-lib embedPage, etc.) treats as the correct page size.
+        page.translateContent(-pdfCropX, -pdfCropY);
+        page.setMediaBox(0, 0, pdfCropWidth, pdfCropHeight);
+        // Remove any existing CropBox so it doesn't override the new MediaBox.
+        page.node.delete(PDFName.of('CropBox'));
       });
 
       const pdfBytes = await pdfDoc.save();
